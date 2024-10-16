@@ -4,24 +4,20 @@ class HistoryModule {
         this.canvas = canvas;
         this.history = [];
         this.currentIndex = -1;
-
-        // Écouter les modifications du canevas
-        this.canvas.on('object:added', () => this.enregistrerEtat());
-        this.canvas.on('object:modified', () => this.enregistrerEtat());
-        this.canvas.on('object:removed', () => this.enregistrerEtat());
     }
 
     enregistrerEtat() {
         // Supprimer les états futurs si on enregistre un nouvel état
         this.history = this.history.slice(0, this.currentIndex + 1);
         // Enregistrer l'état actuel du canevas
-        this.history.push(this.canvas.toJSON());
+        this.history.push(JSON.stringify(this.canvas));
         this.currentIndex++;
     }
 
     annuler() {
         if (this.currentIndex > 0) {
             this.currentIndex--;
+            this.canvas.clear();
             this.canvas.loadFromJSON(this.history[this.currentIndex], () => {
                 this.canvas.renderAll();
             });
@@ -31,6 +27,7 @@ class HistoryModule {
     retablir() {
         if (this.currentIndex < this.history.length - 1) {
             this.currentIndex++;
+            this.canvas.clear();
             this.canvas.loadFromJSON(this.history[this.currentIndex], () => {
                 this.canvas.renderAll();
             });
@@ -308,7 +305,6 @@ class ShapesModule {
 
         const pointer = this.canvas.getPointer(opt.e);
         const width = pointer.x - this.startX;
-        // Pas besoin de calculer la hauteur pour le rectangle à hauteur fixe
 
         if (this.drawingMode === 'rectangle') {
             this.tempShape.set({ width: width, height: pointer.y - this.startY });
@@ -828,7 +824,7 @@ class ImportExportModule {
         this.setupLoadJSON();
         this.setupDeleteObject();
         this.setupDeleteMeasurementText();
-        this.setupClearCanvas(); // Ajout de la méthode pour effacer le canevas
+        this.setupClearCanvas();
     }
 
     setupSaveImage() {
@@ -1100,7 +1096,6 @@ class PrintPreviewModule {
         printWindow.document.close();
         printWindow.focus();
         printWindow.print();
-        // printWindow.close(); // Optionnel : décommenter si vous voulez que la fenêtre se ferme après l'impression
     }
 }
 
@@ -1122,34 +1117,7 @@ class DuplicateModule {
         btn.classList.add('duplicate-btn');
         document.body.appendChild(btn);
         btn.style.display = 'none';
-        btn.style.position = 'absolute';
-        btn.style.transform = 'translate(-50%, -100%)';
-        btn.style.padding = '5px 10px';
-        btn.style.borderRadius = '50%';
-        btn.style.backgroundColor = '#4A98F7';
-        btn.style.color = '#fff';
-        btn.style.border = 'none';
-        btn.style.cursor = 'pointer';
-        btn.style.zIndex = 1000;
-        btn.style.transition = 'background-color 0.3s';
-        btn.style.width = '30px';
-        btn.style.height = '30px';
-        btn.style.display = 'flex';
-        btn.style.alignItems = 'center';
-        btn.style.justifyContent = 'center';
-        btn.style.fontSize = '16px';
-        btn.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.3)';
-        btn.style.borderRadius = '50%';
-        btn.style.backgroundColor = '#4A98F7';
-        btn.style.color = '#fff';
-
-        btn.addEventListener('mouseover', () => {
-            btn.style.backgroundColor = '#3672c7';
-        });
-        btn.addEventListener('mouseout', () => {
-            btn.style.backgroundColor = '#4A98F7';
-        });
-
+        // Styles CSS pour le bouton (déjà définis dans le CSS)
         return btn;
     }
 
@@ -1357,11 +1325,10 @@ class UndoRedoModule {
 
     init() {
         // Cette fonctionnalité est déjà gérée dans le module HistoryModule
-        // Vous pouvez étendre cette classe si nécessaire
     }
 }
 
-// Module de Gestion des Gestes Tactiles avec Hammer.js
+// Module de Gestion des Gestes Tactiles avec Hammer.js et Fabric.js
 class TouchModule {
     constructor(canvas, historyModule) {
         this.canvas = canvas;
@@ -1371,95 +1338,71 @@ class TouchModule {
 
     init() {
         this.initHammer();
+        this.setupFabricTouchEvents();
     }
 
     initHammer() {
         const canvasElement = this.canvas.upperCanvasEl;
+
+        // Initialiser Hammer.js uniquement pour le pincement
         this.hammer = new Hammer.Manager(canvasElement);
 
-        // Ajouter des recognizers pour le panning et le pincement
-        const pan = new Hammer.Pan({ direction: Hammer.DIRECTION_ALL, threshold: 0 });
-        const pinch = new Hammer.Pinch({ threshold: 0 });
-        const tap = new Hammer.Tap({ event: 'doubletap', taps: 2 });
+        const pinch = new Hammer.Pinch();
+        this.hammer.add([pinch]);
 
-        pinch.recognizeWith(pan);
+        this.hammer.on('pinchstart pinchmove', (ev) => {
+            this.handlePinch(ev);
+        });
+    }
 
-        this.hammer.add([pan, pinch, tap]);
+    handlePinch(ev) {
+        let newZoom = this.canvas.getZoom() * ev.scale;
 
-        let lastPosX = 0;
-        let lastPosY = 0;
+        // Limiter le zoom
+        newZoom = Math.max(0.5, Math.min(newZoom, 3));
+
+        const center = new fabric.Point(ev.center.x - this.canvas._offset.left, ev.center.y - this.canvas._offset.top);
+        this.canvas.zoomToPoint(center, newZoom);
+    }
+
+    setupFabricTouchEvents() {
+        // Permettre le défilement tactile
+        this.canvas.allowTouchScrolling = true;
+
+        // Gestion du pan avec Fabric.js
         let isPanning = false;
-        let isPinching = false;
+        let lastPosX, lastPosY;
 
-        // Détecter le panning (défilement tactile)
-        this.hammer.on('panstart', (ev) => {
-            if (ev.pointers.length === 1) {
-                isPanning = true;
-                this.canvas.isDrawingMode = false; // Désactiver le mode dessin pendant le panning
-                lastPosX = ev.deltaX;
-                lastPosY = ev.deltaY;
+        this.canvas.on('touch:gesture', (opt) => {
+            if (opt.e.touches && opt.e.touches.length === 2) {
+                // Désactiver le panning pendant le pincement
+                isPanning = false;
             }
         });
 
-        this.hammer.on('panmove', (ev) => {
-            if (!isPanning) return;
-            const deltaX = ev.deltaX - lastPosX;
-            const deltaY = ev.deltaY - lastPosY;
-            lastPosX = ev.deltaX;
-            lastPosY = ev.deltaY;
+        this.canvas.on('touch:drag', (opt) => {
+            if (opt.e.touches && opt.e.touches.length === 1) {
+                const e = opt.e;
+                if (isPanning) {
+                    const deltaX = e.touches[0].clientX - lastPosX;
+                    const deltaY = e.touches[0].clientY - lastPosY;
+                    lastPosX = e.touches[0].clientX;
+                    lastPosY = e.touches[0].clientY;
 
-            // Mettre à jour la position du canevas
-            const currentTransform = this.canvas.viewportTransform;
-            currentTransform[4] += deltaX;
-            currentTransform[5] += deltaY;
-            this.canvas.requestRenderAll();
+                    const vpt = this.canvas.viewportTransform;
+                    vpt[4] += deltaX;
+                    vpt[5] += deltaY;
+                    this.canvas.requestRenderAll();
+                } else {
+                    isPanning = true;
+                    lastPosX = e.touches[0].clientX;
+                    lastPosY = e.touches[0].clientY;
+                }
+            }
         });
 
-        this.hammer.on('panend pancancel', () => {
+        this.canvas.on('touch:dragend', (opt) => {
             isPanning = false;
-        });
-
-        // Détecter le pincement pour le zoom ou le redimensionnement
-        this.hammer.on('pinchstart', (ev) => {
-            isPinching = true;
-            this.canvas.isDrawingMode = false; // Désactiver le mode dessin pendant le pincement
-            this.lastScale = 1;
-            this.activeObject = this.canvas.getActiveObject();
-        });
-
-        this.hammer.on('pinchmove', (ev) => {
-            if (!isPinching) return;
-
-            const scaleChange = ev.scale / this.lastScale;
-            this.lastScale = ev.scale;
-
-            if (this.activeObject) {
-                // Redimensionner l'objet actif
-                this.activeObject.scaleX *= scaleChange;
-                this.activeObject.scaleY *= scaleChange;
-                this.activeObject.setCoords();
-                this.canvas.renderAll();
-            } else {
-                // Zoom sur le canevas si aucun objet n'est sélectionné
-                let newZoom = this.canvas.getZoom() * scaleChange;
-
-                // Définir les limites de zoom
-                newZoom = Math.max(0.5, Math.min(newZoom, 3));
-
-                this.canvas.zoomToPoint({ x: ev.center.x, y: ev.center.y }, newZoom);
-            }
-        });
-
-        this.hammer.on('pinchend pinchcancel', () => {
-            isPinching = false;
-            this.historyModule.enregistrerEtat();
-        });
-
-        // Détection du double tap pour réinitialiser la vue
-        this.hammer.on('doubletap', () => {
-            this.canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-            this.canvas.setZoom(1);
-            this.canvas.requestRenderAll();
         });
     }
 
@@ -1486,7 +1429,7 @@ class App {
         this.duplicateModule = new DuplicateModule(canvas, this.historyModule);
         this.photoPaletteModule = new PhotoPaletteModule(canvas, this.historyModule);
         this.undoRedoModule = new UndoRedoModule(this.historyModule);
-        this.touchModule = new TouchModule(canvas, this.historyModule); // Nouveau module pour les gestes tactiles
+        this.touchModule = new TouchModule(canvas, this.historyModule); // Module pour les gestes tactiles
     }
 
     init() {
